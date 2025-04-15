@@ -1,0 +1,33 @@
+# UNMS/UISP API Configuration
+unms:
+  url: "https://my.unms.server"
+  api_key: ""
+  cache_ttl: 300  # Cache time-to-live in seconds
+
+# Map Defaults
+map:
+  center_lat: 42.619482
+  center_lon: -112.014283
+  zoom_start: 12
+  tile_layer: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+  tile_attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+
+# Frequency Band Colors
+frequency_colors:
+  2400: "#FF0000"  # 2.4GHz - Red
+  3500: "#FFA500"  # 3.5GHz - Orange
+  5000: "#0000FF"  # 5GHz - Blue
+  6000: "#00FF00"  # 6GHz - Green
+  default: "#888888"  # Default color
+
+# Channel Opacity
+channel_width_opacity:
+  20: 0.7
+  40: 0.5
+  80: 0.3
+
+# Antenna Default Parameters (used when data is missing)
+antenna_defaults:
+  height: 6  # meters
+  beamwidth: 60.0  # degrees
+  downtilt: 2.5  # degrees
