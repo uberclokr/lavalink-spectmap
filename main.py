@@ -28,6 +28,7 @@ def main():
         renderer.add_antenna_coverage(antenna)
     
     # Save the map
+    renderer.finalize_map()
     renderer.save_map(args.output)
     print(f"Map saved to {args.output}")
 

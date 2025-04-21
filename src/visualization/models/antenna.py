@@ -8,6 +8,7 @@ class Antenna:
     id: str
     name: str
     model: str
+    antenna: str
     latitude: float
     longitude: float
     azimuth: float          # Degrees (0-360)
@@ -28,14 +29,49 @@ class Antenna:
     @property
     def frequency_band(self) -> Tuple[int, int]:
         """Return the general frequency band"""
-        if self.frequency < 3000:
-            return [2400, 2495] # Innacurate, needs updating
-        elif 5150 <= self.frequency < 5895:
-            return [5150, 5895]
-        elif 58000 <= self.frequency < 70000:
+        if self.frequency < 3000: # 2.4GHz band 
+            return [2400, 2495]
+        elif 5150 <= self.frequency < 5250: # U-NII-1
+            return [5150, 5250]
+        elif 5250 <= self.frequency < 5350: # U-NII-2A
+            return [5250, 5350]
+        elif 5350 <= self.frequency < 5470: # U-NII-2B
+            return [5350, 5470]
+        elif 5470 <= self.frequency < 5725: # U-NII-2C
+            return [5470, 5725]
+        elif 5725 <= self.frequency < 5850: # U-NII-3
+            return [5725, 5850]
+        elif 5850 <= self.frequency < 5925: # U-NII-4
+            return [5850, 5925]
+        elif 5925 <= self.frequency < 7125: # U-NII-5 through U-NII-8
+            return [5925, 7125]
+        elif 58000 <= self.frequency < 70000: # 60GHz band
             return [58000, 70000]
         return None
     
+    @property
+    def frequency_band_name(self) -> Tuple[int, int]:
+        """Return the general frequency band"""
+        if self.frequency < 3000: # ISM 2.4GHz band 
+            return "ISM"
+        elif 5150 <= self.frequency < 5250: # U-NII-1
+            return "U-NII-1"
+        elif 5250 <= self.frequency < 5350: # U-NII-2A
+            return "U-NII-2A"
+        elif 5350 <= self.frequency < 5470: # U-NII-2B
+            return "U-NII-2B"
+        elif 5470 <= self.frequency < 5725: # U-NII-2C
+            return "U-NII-2C"
+        elif 5725 <= self.frequency < 5850: # U-NII-3
+            return "U-NII-3"
+        elif 5850 <= self.frequency < 5925: # U-NII-4
+            return "U-NII-4"
+        elif 5925 <= self.frequency < 7125: # U-NII-5 through U-NII-8
+            return "U-NII-5...8"
+        elif 58000 <= self.frequency < 70000: # 60GHz band
+            return "Vband"
+        return None
+
     @property
     def channel_60(self) -> str:
         """Return operating 60Ghz channel identifier"""
@@ -194,6 +230,15 @@ class Antenna:
     def _model_beamwidth(self) -> Tuple[float, float]:
         """Return default beamwidths (H, V) for common Ubiquiti models"""
         model_lower = self.model.lower()
+        antenna_lower = self.antenna.lower()
+
+        if "r5ac" in model_lower: # If RocketAC radio
+            if "amo-5g10" in antenna_lower:
+                return (360.0, 12.0) # AMO 5G10 antenna
+        
+        if "lap-gps" in model_lower:
+            return (90,20)
+
         if "airmax" in model_lower:
             if "ac" in model_lower:
                 return (90.0, 7.0)  # Typical for AirMax AC sector antennas
@@ -215,16 +260,30 @@ class Antenna:
         
         if "af60" in model_lower:
             return (1.6, 1.6) # AirFiber 60GHz
-        
+
         return (60.0, 15.0)         # Default fallback
     
     def _model_range_m(self) -> float:
         """Return effective range for common Ubiquiti models"""
         model_lower = self.model.lower()
+        antenna_lower = self.antenna.lower()
 
+        if "r5ac" in model_lower or "rp-5ac": # If RocketAC radio
+            if "amo-5g10" in antenna_lower:
+                return 750.0
+            return 3000.0
+        
+        if "ps-5ac" in model_lower:
+            if "horn" in antenna_lower:
+                return 3000.0
+            return 3000.0
+        
+        if "lap-gps" in model_lower:
+            return 2000.0
+            
         if "wave-ap" in model_lower:
             if "micro" in model_lower:
-                return 6000.0
+                return 6000.0 # Realistic
             return 8000.0
         
         if "wave-pro" in model_lower:
