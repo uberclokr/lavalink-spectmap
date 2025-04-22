@@ -208,19 +208,23 @@ class CoverageCalculator:
 
         return points
     
-    def calculate_viewshed_raster(self, center_lat: float, center_lon: float, azimuth: float, downtilt: float, distance_m: float) -> np.ndarray:
+    def calculate_viewshed_raster(self, center_lat: float, center_lon: float, azimuth: float, downtilt: float, distance_m: float = 8000) -> np.ndarray:
         """
         Calculate a viewshed raster within the confines of the cone using the preloaded raster array.
         """
-        # Get the raster bounds
-        bounds = rasterio.transform.array_bounds(raster_array.shape[0], raster_array.shape[1], raster_transform)
+        from rasterio.warp import transform_bounds
+
+        # Transform raster bounds to latitude/longitude
+        bounds = transform_bounds(raster_crs, "EPSG:4326", *rasterio.transform.array_bounds(
+            raster_array.shape[0], raster_array.shape[1], raster_transform
+        ))
 
         # Create an empty viewshed array
         viewshed = np.zeros(raster_array.shape, dtype=np.uint8)
 
         # Iterate over the cone's area
         for angle in np.linspace(azimuth - self.beamwidth / 2, azimuth + self.beamwidth / 2, num=36):
-            for dist in np.linspace(0, distance_m, num=100):
+            for dist in np.linspace(0, min(distance_m, 8000), num=100):  # Cap distance at 8 km
                 # Calculate the target point's lat/lon
                 target_point = distance.distance(meters=dist).destination(
                     point=(center_lat, center_lon),
@@ -232,10 +236,12 @@ class CoverageCalculator:
                 if not (bounds[0] <= target_lon <= bounds[2] and bounds[1] <= target_lat <= bounds[3]):
                     continue  # Skip points outside the raster bounds
 
-                # Convert target lat/lon to row/col
+                # Convert target lat/lon to the raster's CRS
                 try:
-                    target_row, target_col = rasterio.transform.rowcol(raster_transform, target_lon, target_lat)
-                except ValueError:
+                    from rasterio.warp import transform
+                    target_lon, target_lat = transform("EPSG:4326", raster_crs, [target_lon], [target_lat])
+                    target_row, target_col = rasterio.transform.rowcol(raster_transform, target_lon[0], target_lat[0])
+                except (ValueError, IndexError):
                     continue  # Skip points that cannot be indexed
 
                 # Ensure indices are within the raster's dimensions

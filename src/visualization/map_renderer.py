@@ -13,6 +13,8 @@ import matplotlib.colors as mcolors
 import yaml
 import rasterio
 import asyncio
+from typing import List, Tuple
+from PIL import Image
 
 def load_config(config_path: Path) -> dict:
     with open(config_path) as f:
@@ -89,7 +91,9 @@ class MapRenderer:
     async def add_antenna_directional_cone(self, antenna: Antenna):
         """Add a coverage cone for a single antenna asynchronously."""
         try:
-            """GENERATE DIRECTIONAL POLYGON"""
+            # Debugging: Log antenna details
+            print(f"Processing antenna: {antenna.name}, Lat: {antenna.latitude}, Lon: {antenna.longitude}, Azimuth: {antenna.azimuth}")
+
             # Initialize the CoverageCalculator
             calculator = CoverageCalculator(
                 name=antenna.name,
@@ -98,7 +102,7 @@ class MapRenderer:
                 beamheight=antenna.beamwidth_vertical
             )
 
-            # Calculate the coverage polygon (synchronous, but lightweight)
+            # Calculate the coverage polygon
             coverage_points = await asyncio.to_thread(
                 calculator.calculate_coverage_cone,
                 antenna.latitude,
@@ -107,40 +111,35 @@ class MapRenderer:
                 antenna.downtilt,
                 antenna._model_range_m()
             )
+            if coverage_points is None:
+                raise ValueError(f"Coverage points calculation returned None for antenna: {antenna.name}")
 
-            """GENERATE VIEWSHED RASTER"""
-            # Calculate the viewshed raster (offload to a thread)
-            viewshed = await asyncio.to_thread(
-                calculator.calculate_viewshed_raster,
-                antenna.latitude,
-                antenna.longitude,
-                antenna.azimuth,
-                antenna.downtilt,
-                antenna._model_range_m()
-            )
+            # Only calculate and render viewshed for PTMP APs. Naming convention includes 'AP' in the name.
+            viewshed_png = f"tmp/viewshed_{antenna.name}.png"
+            if 'AP' in antenna.name:
+                # Only calculate and render viewshed if viewshed PNG does not exist
+                if not Path(viewshed_png).exists():
 
-            # Save the viewshed raster as a GeoTIFF with downsampling
-            raster_path = f"tmp/viewshed_{antenna.name}.tif"
-            resolution_scale = 0.25 # Reduce resolution to 25%
-            await self._save_viewshed_raster(viewshed, raster_path, scale=resolution_scale)
+                    # Calculate the viewshed raster
+                    viewshed = await asyncio.to_thread(
+                        calculator.calculate_viewshed_raster,
+                        antenna.latitude,
+                        antenna.longitude,
+                        antenna.azimuth,
+                        antenna.downtilt,
+                        antenna._model_range_m()
+                    )
+                    if viewshed is None:
+                        raise ValueError(f"Viewshed raster calculation returned None for antenna: {antenna.name}")
 
-            # Add the viewshed raster to the map as an overlay
-            bounds = [
-                [antenna.latitude - 0.01, antenna.longitude - 0.01],  # Adjust bounds as needed
-                [antenna.latitude + 0.01, antenna.longitude + 0.01]
-            ]
-            ImageOverlay(
-                image=raster_path,
-                bounds=bounds,
-                opacity=0.5,
-                name=f"Viewshed: {antenna.name}"
-            ).add_to(self.map)
-
-            """GENERATE AND FORMAT FOLIUM MAP"""
-            # Get color based on frequency band
-            fill_color = frequency_to_color(antenna)
+                    # Save the viewshed raster as an image if Access Point
+                    await self._save_viewshed_as_image(viewshed, viewshed_png, coverage_points)  
+            
+                # Add viewshed PNG to the map
+                await self.add_viewshed_to_map(viewshed_png, coverage_points)
 
             # Add the polygon to the map
+            fill_color = frequency_to_color(antenna)
             polygon = folium.Polygon(
                 locations=coverage_points,
                 color=fill_color,
@@ -149,37 +148,10 @@ class MapRenderer:
                 weight=1,
                 popup=f"<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"{config['unms']['url']}/nms/devices#id={antenna.id}&panelType=device-panel\">{antenna.name}</a><br>Center: {antenna.frequency}<br>Width: {antenna.channel_width}"
             )
-
-            # Add the polygon to the appropriate layer
             if antenna.frequency < 7000:
                 self.layer_5ghz.add_child(polygon)
             elif 55000 <= antenna.frequency < 72000:
                 self.layer_60ghz.add_child(polygon)
-
-            # Add frequency label to each coverage cone
-            centroid_lat = sum(lat for lat, lon in coverage_points) / len(coverage_points)
-            centroid_lon = sum(lon for lat, lon in coverage_points) / len(coverage_points)
-            text_marker = folium.Marker(
-                location=[centroid_lat, centroid_lon],
-                icon=folium.DivIcon(
-                    html=f"""
-                    <div style="
-                        text-align: center;
-                        font-size: 12px;
-                        font-weight: bold;
-                        color: {fill_color};
-                        text-align: center;
-                        text-shadow: 0px 0px 2px black;
-                    ">
-                        {antenna.name.split('.')[0]}<br>{antenna.frequency}
-                    </div>
-                    """
-                )
-            )
-            if antenna.frequency < 7000:
-                self.layer_5ghz.add_child(text_marker)  # We want these on the same layer as the polygon
-            elif 55000 <= antenna.frequency < 72000:
-                self.layer_60ghz.add_child(text_marker)
 
         except Exception as e:
             print(f"Error calculating coverage for {antenna.name}: {e}")
@@ -238,6 +210,72 @@ class MapRenderer:
         elif 55000 <= frequency < 72000:
             return 60000
     
+    async def _save_viewshed_as_image(self, viewshed: np.ndarray, output_path: str, coverage_points: List[Tuple[float, float]]):
+        """
+        Save the viewshed raster as a transparent green image, cropped to remove empty space.
+        """
+        def create_cropped_image():
+            # Find the bounding box of non-zero pixels
+            non_zero_rows, non_zero_cols = np.nonzero(viewshed)
+            if len(non_zero_rows) == 0 or len(non_zero_cols) == 0:
+                raise ValueError("Viewshed raster is empty, cannot create image.")
+
+            # Calculate the bounding box
+            min_row, max_row = non_zero_rows.min(), non_zero_rows.max()
+            min_col, max_col = non_zero_cols.min(), non_zero_cols.max()
+
+            # Crop the viewshed array
+            cropped_viewshed = viewshed[min_row:max_row + 1, min_col:max_col + 1]
+
+            # Create the cropped image
+            height, width = cropped_viewshed.shape
+            image = Image.new("RGBA", (width, height), (0, 0, 0, 0))  # Fully transparent background
+            for row in range(height):
+                for col in range(width):
+                    if cropped_viewshed[row, col] == 1:  # Visible point
+                        image.putpixel((col, row), (0, 255, 0, 128))  # Green with 50% transparency
+
+            # Save the cropped image
+            image.save(output_path, "PNG")
+
+            # Return the bounding box for further use
+            return min_row, max_row, min_col, max_col
+
+        # Offload the image creation to a separate thread
+        min_row, max_row, min_col, max_col = await asyncio.to_thread(create_cropped_image)
+
+        # Adjust the coverage points to reflect the cropped area
+        # (Optional: You can use this bounding box to adjust map bounds if needed)
+
+    def adjust_transform_for_crop(original_transform: Affine, min_row: int, min_col: int) -> Affine:
+        """
+        Adjust the raster transform for the cropped area.
+        :param original_transform: The original raster transform.
+        :param min_row: The minimum row of the cropped area.
+        :param min_col: The minimum column of the cropped area.
+        :return: The adjusted transform.
+        """
+        return original_transform * Affine.translation(min_col, min_row)
+
+    async def add_viewshed_to_map(self, viewshed_image_path: str, bounds: List[Tuple[float, float]]):
+        """
+        Add the viewshed image to the map as an overlay.
+        :param viewshed_image_path: Path to the viewshed image file.
+        :param bounds: The geographical bounds of the viewshed image (southwest and northeast corners).
+        """
+        # Calculate bounds if not already in the correct format
+        if len(bounds) > 2:
+            lats, lons = zip(*bounds)
+            bounds = [(min(lats), min(lons)), (max(lats), max(lons))]
+
+        # Add the image overlay to the map
+        folium.raster_layers.ImageOverlay(
+            image=viewshed_image_path,
+            bounds=bounds,
+            opacity=0.5,  # Adjust transparency
+            name="Viewshed"
+        ).add_to(self.map)
+
     def finalize_map(self):
         """Finalize the map by adding layers and controls"""
         # Add the feature groups to the map only if they contain features
